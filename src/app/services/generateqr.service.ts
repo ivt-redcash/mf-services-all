@@ -5,6 +5,12 @@ import { Observable } from 'rxjs';
 import { AuthService } from './auth.service';
 import { environment } from 'src/environments/environment';
 
+export interface QrEmissionIdentity {
+  idQr?: string | null;
+  efimeroCci?: string | null;
+  emissionId?: number | string | null;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -108,14 +114,14 @@ export class GenerateQrService {
     return this.httpClient.post<any>(`${environment.URL_API_GENERATE_QR}/v1/qr/cancel`, body);
   }
 
-  markReturned(idQrs: string[], responsable?: string): Observable<any> {
-    const body: any = { idQrs };
+  markReturned(identities: Array<string | QrEmissionIdentity>, responsable?: string): Observable<any> {
+    const body: any = this.buildMultipleEmissionIdentityBody(identities);
     if (responsable) {
       body.responsable = responsable;
     }
     return this.httpClient.post<any>(`${environment.URL_API_GENERATE_QR}/v1/qr/mark-returned`, body);
   }
-  reNotifyByExternalUser(idQr: string, responsable?: string): Observable<any> {
+  reNotifyByExternalUser(identity: string | QrEmissionIdentity, responsable?: string): Observable<any> {
     const token = this.authService.getToken();
     
     let headers = new HttpHeaders();
@@ -129,14 +135,14 @@ export class GenerateQrService {
 
     headers = headers.set('X-Skip-GenerateQr-Auth', 'true')
 
-    const body: any = { idQr };
+    const body: any = this.buildEmissionIdentityBody(identity);
     if (responsable) {
       body.responsable = responsable;
     }
     return this.httpClient.post<any>(`${environment.URL_API_GENERATE_QR}/v1/external/qr/payment-webhook/replay`, body, { headers});
   }
-  reNotifyByInternalUser(idQr: string, responsable?: string): Observable<any> {
-    const body: any = { idQr };
+  reNotifyByInternalUser(identity: string | QrEmissionIdentity, responsable?: string): Observable<any> {
+    const body: any = this.buildEmissionIdentityBody(identity);
     if (responsable) {
       body.responsable = responsable;
     }
@@ -375,8 +381,42 @@ export class GenerateQrService {
     return this.httpClient.post<any>(`${environment.URL_API_REPROCESS}/v1/reprocess-next-attempt`, body);
   }
 
-  notificationHistory(idQr: string): Observable<any> {
-    return this.httpClient.post<any>(`${environment.URL_API_GENERATE_QR}/v1/qr/notification-history`, { idQr });
+  notificationHistory(identity: string | QrEmissionIdentity): Observable<any> {
+    return this.httpClient.post<any>(
+      `${environment.URL_API_GENERATE_QR}/v1/qr/notification-history`,
+      this.buildEmissionIdentityBody(identity)
+    );
+  }
+
+  private buildEmissionIdentityBody(identity: string | QrEmissionIdentity): { idQr?: string; efimeroCci?: string } {
+    if (typeof identity === 'string') {
+      return { idQr: identity };
+    }
+    const efimeroCci = String(identity?.efimeroCci || '').trim();
+    if (efimeroCci) {
+      return { efimeroCci };
+    }
+    const idQr = String(identity?.idQr || '').trim();
+    return idQr ? { idQr } : {};
+  }
+
+  private buildMultipleEmissionIdentityBody(
+    identities: Array<string | QrEmissionIdentity>
+  ): { idQrs?: string[]; efimeroCcis?: string[] } {
+    const idQrs: string[] = [];
+    const efimeroCcis: string[] = [];
+    identities.forEach(identity => {
+      const body = this.buildEmissionIdentityBody(identity);
+      if (body.efimeroCci) {
+        efimeroCcis.push(body.efimeroCci);
+      } else if (body.idQr) {
+        idQrs.push(body.idQr);
+      }
+    });
+    return {
+      ...(idQrs.length ? { idQrs } : {}),
+      ...(efimeroCcis.length ? { efimeroCcis } : {})
+    };
   }
 
 
