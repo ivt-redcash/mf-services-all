@@ -131,7 +131,7 @@
     <mat-card class="custom-border-radius-1-25">
       <mat-card-content>
         <div class="generateqr-table-wrap">
-          <uni-dynamic-table [columns]="columns" [data]="dataService" element_id="id_qr" [pageKey]="pageKey"
+          <uni-dynamic-table [columns]="columns" [data]="dataService" element_id="rowIdentity" [pageKey]="pageKey"
             [refreshFunction]="reload.bind(this)" (pageChange)="onPageChange($event)" [lengthTable]="count"
             [customExportFunction]="exportDataViaAPI.bind(this)" [showExport]="true" (clickButtonEvent)="clickButton($event)">
 

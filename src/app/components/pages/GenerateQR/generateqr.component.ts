@@ -12,7 +12,7 @@ import { PageEvent } from '@angular/material/paginator';
 import { PaginationUtils } from 'src/app/utilities/PaginationUtils';
 import { filter, forkJoin, lastValueFrom, finalize, map } from 'rxjs';
 import { DialogServiceConfigComponent } from 'src/app/dialogs/dialog-service-config/dialog-service-config.component';
-import { GenerateQrService } from 'src/app/services/generateqr.service';
+import { GenerateQrService, QrEmissionIdentity } from 'src/app/services/generateqr.service';
 import { AuthService } from 'src/app/services/auth.service';
 import { environment } from 'src/environments/environment';
 import * as QRCode from 'qrcode';
@@ -153,7 +153,7 @@ export class GenerateQR implements OnInit {
   public qrResult: any = null;
   public qrImageSrc: string = '';
   public pendingCancelId: string | null = null;
-  public pendingReturnRow: string | null = null;
+  public pendingReturnRow: any = null;
   public massiveResult: any = null;
   public sftpItems: string[] = [];
   public massiveServiceFilter: string = '';
@@ -373,14 +373,15 @@ export class GenerateQR implements OnInit {
       error: (err) => {
         console.error(err);
         this.spinner.spinnerOnOff();
-        this.mytoastr.showError('Error al anular QR', '');
+        this.showApiError(err, 'No se pudo anular el QR');
       }
     });
   }
 
   openMarkReturnedDialog(element: any) {
-    this.pendingReturnRow = String(element?.id_qr || element?.id || '');
-    if (!this.pendingReturnRow) {
+    this.pendingReturnRow = element;
+    const idQr = this.getRowIdQr(element);
+    if (!idQr && !this.getRowEfimeroCci(element)) {
       this.mytoastr.showWarning('ID QR no disponible', '');
       return;
     }
@@ -398,7 +399,7 @@ export class GenerateQR implements OnInit {
       });
     }else{
       this.headSubTitleReturned = "Solo se puede actualizar cuando el estado es pagado, notificado no pagado o fallido."
-      this.contentSubTitleReturned = `La devolución debe gestionarse por el proceso correspondiente. ¿Deseas marcar como devuelto el QR ${this.pendingReturnRow}?`
+      this.contentSubTitleReturned = `La devolución debe gestionarse por el proceso correspondiente. ¿Deseas marcar como devuelto el QR ${idQr || '-'}?`
       this.markReturnedDialogRef = this.dialog.open(this.markReturnedDialog, {
         width: '480px',
         maxWidth: '95vw',
@@ -416,7 +417,7 @@ export class GenerateQR implements OnInit {
     this.isMarkingReturned = true;
     this.spinner.spinnerOnOff();
     const responsable = this.getResponsable();
-    this.generateQrService.markReturned([this.pendingReturnRow], responsable).pipe(
+    this.generateQrService.markReturned([this.getRowIdentity(this.pendingReturnRow)], responsable).pipe(
       finalize(() => {
         this.isMarkingReturned = false;
       })
@@ -437,7 +438,7 @@ export class GenerateQR implements OnInit {
       error: (err) => {
         console.error(err);
         this.spinner.spinnerOnOff();
-        this.mytoastr.showError('Error al actualizar estado', '');
+        this.showApiError(err, 'Error al actualizar estado');
       }
     });
   }
@@ -770,6 +771,9 @@ export class GenerateQR implements OnInit {
         }
         const normalizedItems = items.map((item: any) => ({
           ...item,
+          emissionId: item?.emissionId ?? item?.emission_id ?? item?.id,
+          efimeroCci: item?.efimeroCci ?? item?.efimero_cci,
+          rowIdentity: item?.emissionId ?? item?.emission_id ?? item?.efimeroCci ?? item?.efimero_cci ?? item?.id_qr ?? item?.id,
           referencia: item?.referencia ?? item?.suministro ?? item?.reference ?? item?.codigo_usuario,
           generatedBy: item?.generatedBy ?? item?.generated_by ?? item?.frontendUsername ?? item?.frontend_username ?? '-',
           amount: this.formatAmountInCents(item?.amount),
@@ -1504,8 +1508,9 @@ export class GenerateQR implements OnInit {
 
   private openReNotifyDialog(row: any) {
     console.log('row a renotificar', row)
-    this.pendingReturnRow = String(row?.id_qr || row?.id || '');
-    if (!this.pendingReturnRow) {
+    this.pendingReturnRow = row;
+    const idQr = this.getRowIdQr(row);
+    if (!idQr && !this.getRowEfimeroCci(row)) {
       this.mytoastr.showWarning('ID QR no disponible', '');
       return;
     }
@@ -1515,7 +1520,7 @@ export class GenerateQR implements OnInit {
     
     if (estadoPago === 'pagado' || estadoPagoRaw === 1 || estadoPagoRaw === '1') {
       this.headSubTitleReNotify = "Se enviará nuevamente la notificación de pago al webhook del cliente."
-      this.contentSubTitleReNotify = `¿Deseas renotificar el QR ${this.pendingReturnRow}?`
+      this.contentSubTitleReNotify = `¿Deseas renotificar el QR ${idQr || '-'}?`
       this.reNotifyDialogRef = this.dialog.open(this.reNotifyDialog, {
         width: '480px',
         maxWidth: '95vw',
@@ -1534,15 +1539,15 @@ export class GenerateQR implements OnInit {
   }
   
   confirmReNotify() {
-    const idQr = this.pendingReturnRow;
-    if (!idQr || this.isReNotified) {
+    const row = this.pendingReturnRow;
+    if (!row || this.isReNotified) {
       return;
     }
     this.isReNotified = true;
     this.spinner.spinnerOnOff();
     const responsable = this.getResponsable();
     
-    const request$ = this.generateQrService.reNotifyByInternalUser(String(idQr), responsable);
+    const request$ = this.generateQrService.reNotifyByInternalUser(this.getRowIdentity(row), responsable);
 
     request$.pipe(
       finalize(() => this.isReNotified = false)
@@ -1562,9 +1567,31 @@ export class GenerateQR implements OnInit {
       error: (err) => {
         console.error(err);
         this.spinner.spinnerOnOff();
-        this.mytoastr.showError('Error al reprocesar', '');
+        this.showApiError(err, 'Error al reprocesar');
       }
     });
+  }
+
+  private getRowIdQr(row: any): string {
+    return String(row?.id_qr ?? row?.idQr ?? row?.qr_id ?? '').trim();
+  }
+
+  private getRowEfimeroCci(row: any): string {
+    return String(row?.efimeroCci ?? row?.efimero_cci ?? '').trim();
+  }
+
+  private getRowIdentity(row: any): QrEmissionIdentity {
+    return {
+      idQr: this.getRowIdQr(row),
+      efimeroCci: this.getRowEfimeroCci(row),
+      emissionId: row?.emissionId ?? row?.emission_id
+    };
+  }
+
+  private showApiError(error: any, fallback: string): void {
+    const detail = error?.error?.detail ?? error?.error?.message ?? error?.error;
+    const message = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : fallback;
+    this.mytoastr.showError(fallback, message);
   }
 
 }

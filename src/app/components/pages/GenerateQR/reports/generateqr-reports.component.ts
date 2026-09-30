@@ -4,7 +4,7 @@ import { AbstractControl, FormBuilder, FormGroup, ValidationErrors, ValidatorFn,
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { PageEvent } from '@angular/material/paginator';
 import { filter, forkJoin, lastValueFrom, finalize, map } from 'rxjs';
-import { GenerateQrService } from 'src/app/services/generateqr.service';
+import { GenerateQrService, QrEmissionIdentity } from 'src/app/services/generateqr.service';
 import { AuthService } from 'src/app/services/auth.service';
 import { MytoastrService } from 'src/app/services/mytoastr';
 import { SpinnerService } from 'src/app/services/spinner.service';
@@ -764,15 +764,15 @@ export class GenerateQrReportsComponent implements OnInit {
 
 
   openNotificationHistory() {
-    const idQr = this.selectedRow?.qr_id;
-    if (!idQr) {
+    const identity = this.getRowIdentity(this.selectedRow);
+    if (!identity.idQr && !identity.efimeroCci) {
       this.mytoastr.showWarning('ID QR no disponible', '');
       return;
     }
     this.isLoadingHistory = true;
     this.notificationHistory = null;
     this.notificationItems = [];
-    this.generateQrService.notificationHistory(String(idQr)).pipe(
+    this.generateQrService.notificationHistory(identity).pipe(
       finalize(() => {
         this.isLoadingHistory = false;
       })
@@ -788,7 +788,7 @@ export class GenerateQrReportsComponent implements OnInit {
       },
       error: (err) => {
         console.error(err);
-        this.mytoastr.showError('Error al cargar historial', '');
+        this.showApiError(err, 'Error al cargar historial');
       }
     });
   }
@@ -855,7 +855,7 @@ export class GenerateQrReportsComponent implements OnInit {
         },
         error: (err) => {
           console.error(err);
-          this.mytoastr.showError('No se pudo anular el QR', '');
+          this.showApiError(err, 'No se pudo anular el QR');
         }
       });
   }
@@ -880,8 +880,9 @@ export class GenerateQrReportsComponent implements OnInit {
 
   private openMarkReturnedDialog(row: any) {
     console.log('row devolver', row)
-    this.pendingReturnRow = String(row?.qr_id || row?.id || '');
-    if (!this.pendingReturnRow) {
+    this.pendingReturnRow = row;
+    const idQr = this.getRowIdQr(row);
+    if (!idQr && !this.getRowEfimeroCci(row)) {
       this.mytoastr.showWarning('ID QR no disponible', '');
       return;
     }
@@ -907,7 +908,7 @@ export class GenerateQrReportsComponent implements OnInit {
       });
     } else{
       this.headSubTitleReturned = "Esta acción solo actualizará el estado del QR en el sistema."
-      this.contentSubTitleReturned = `La devolución del pago debe gestionarse por el proceso correspondiente. ¿Deseas marcar como devuelto el QR ${this.pendingReturnRow}?`
+      this.contentSubTitleReturned = `La devolución del pago debe gestionarse por el proceso correspondiente. ¿Deseas marcar como devuelto el QR ${idQr || '-'}?`
       this.markReturnedDialogRef = this.dialog.open(this.markReturnedDialog, {
         width: '480px',
         maxWidth: '95vw',
@@ -918,14 +919,14 @@ export class GenerateQrReportsComponent implements OnInit {
   }
 
   confirmMarkReturned() {
-    const idQr = this.pendingReturnRow;
-    if (!idQr || this.isMarkingReturned) {
+    const row = this.pendingReturnRow;
+    if (!row || this.isMarkingReturned) {
       return;
     }
     this.isMarkingReturned = true;
     this.spinner.spinnerOnOff();
     const responsable = this.getResponsable();
-    this.generateQrService.markReturned([String(idQr)], responsable)
+    this.generateQrService.markReturned([this.getRowIdentity(row)], responsable)
       .pipe(finalize(() => {
         this.isMarkingReturned = false;
       }))
@@ -945,7 +946,7 @@ export class GenerateQrReportsComponent implements OnInit {
         error: (err) => {
           console.error(err);
           this.spinner.spinnerOnOff();
-          this.mytoastr.showError('Error al actualizar estado', '');
+          this.showApiError(err, 'Error al actualizar estado');
         }
       });
   }
@@ -953,8 +954,9 @@ export class GenerateQrReportsComponent implements OnInit {
 
   private openReNotifyDialog(row: any) {
     console.log('row a renotificar', row)
-    this.pendingReturnRow = String(row?.qr_id || row?.id || '');
-    if (!this.pendingReturnRow) {
+    this.pendingReturnRow = row;
+    const idQr = this.getRowIdQr(row);
+    if (!idQr && !this.getRowEfimeroCci(row)) {
       this.mytoastr.showWarning('ID QR no disponible', '');
       return;
     }
@@ -964,7 +966,7 @@ export class GenerateQrReportsComponent implements OnInit {
     
     if (estadoPago === 'pagado' || estadoPagoRaw === 1 || estadoPagoRaw === '1') {
       this.headSubTitleReNotify = "Se enviará nuevamente la notificación de pago al webhook del cliente."
-      this.contentSubTitleReNotify = `¿Deseas renotificar el QR ${this.pendingReturnRow}?`
+      this.contentSubTitleReNotify = `¿Deseas renotificar el QR ${idQr || '-'}?`
       this.reNotifyDialogRef = this.dialog.open(this.reNotifyDialog, {
         width: '480px',
         maxWidth: '95vw',
@@ -983,8 +985,8 @@ export class GenerateQrReportsComponent implements OnInit {
   }
   
   confirmReNotify() {
-    const idQr = this.pendingReturnRow;
-    if (!idQr || this.isReNotified) {
+    const row = this.pendingReturnRow;
+    if (!row || this.isReNotified) {
       return;
     }
     this.isReNotified = true;
@@ -992,8 +994,8 @@ export class GenerateQrReportsComponent implements OnInit {
     const responsable = this.getResponsable();
     
     const request$ = this.reportMode === "external"
-      ? this.generateQrService.reNotifyByExternalUser(String(idQr), responsable)
-      : this.generateQrService.reNotifyByInternalUser(String(idQr), responsable);
+      ? this.generateQrService.reNotifyByExternalUser(this.getRowIdentity(row), responsable)
+      : this.generateQrService.reNotifyByInternalUser(this.getRowIdentity(row), responsable);
 
     request$.pipe(
       finalize(() => this.isReNotified = false)
@@ -1013,10 +1015,33 @@ export class GenerateQrReportsComponent implements OnInit {
       error: (err) => {
         console.error(err);
         this.spinner.spinnerOnOff();
-        this.mytoastr.showError('Error al reprocesar', '');
+        this.showApiError(err, 'Error al reprocesar');
       }
     });
   }
+
+  private getRowIdQr(row: any): string {
+    return String(row?.qr_id ?? row?.id_qr ?? row?.idQr ?? '').trim();
+  }
+
+  private getRowEfimeroCci(row: any): string {
+    return String(row?.efimeroCci ?? row?.efimero_cci ?? '').trim();
+  }
+
+  private getRowIdentity(row: any): QrEmissionIdentity {
+    return {
+      idQr: this.getRowIdQr(row),
+      efimeroCci: this.getRowEfimeroCci(row),
+      emissionId: row?.emissionId ?? row?.emission_id
+    };
+  }
+
+  private showApiError(error: any, fallback: string): void {
+    const detail = error?.error?.detail ?? error?.error?.message ?? error?.error;
+    const message = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : fallback;
+    this.mytoastr.showError(fallback, message);
+  }
+
   downloadDetailQrImage() {
     if (!this.detailQrImage) {
       return;
@@ -1091,6 +1116,9 @@ export class GenerateQrReportsComponent implements OnInit {
     const estadoPagoLabel = this.formatEstadoPago(estadoPagoRaw);
     const vigenciaLabel = this.formatVigencia(item?.estado_vigencia ?? item?.vigencia);
     return {
+      emissionId: item?.emissionId ?? item?.emission_id ?? item?.id,
+      efimeroCci: item?.efimeroCci ?? item?.efimero_cci,
+      rowIdentity: item?.emissionId ?? item?.emission_id ?? item?.efimeroCci ?? item?.efimero_cci ?? item?.qr_id ?? item?.id_qr ?? item?.idQr ?? item?.id,
       qr_id: item?.qr_id ?? item?.id_qr ?? item?.idQr ?? item?.id,
       hash_qr: item?.hash_qr ?? item?.hash ?? item?.qrHash,
       qr_created_at: item?.qr_created_at ?? item?.created_at ?? item?.createdAt ?? item?.fecha_generacion,
